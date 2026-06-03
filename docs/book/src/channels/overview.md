@@ -78,8 +78,9 @@ See [Voice & telephony](./voice.md).
 | CLI | always on | Local stdin/stdout |
 | Gateway REST/WS | always on | HTTP + WebSocket |
 | ACP (Agent Client Protocol) | `channel-acp-server` | JSON-RPC 2.0 over stdio: editor/IDE sessions |
+| NATS (Synadia Agent Protocol) | `nats-agent` | NATS microservice `agents` — discover + prompt over Core NATS |
 
-See [Webhooks](./webhook.md) and [ACP](./acp.md).
+See [Webhooks](./webhook.md), [ACP](./acp.md), and [NATS agent](./nats-agent.md).
 
 ## Configuration
 

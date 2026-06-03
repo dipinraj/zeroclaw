@@ -72,6 +72,7 @@
   - [Voice & telephony](./channels/voice.md)
   - [Webhooks](./channels/webhook.md)
   - [ACP (Agent Client Protocol)](./channels/acp.md)
+  - [NATS agent (Synadia protocol)](./channels/nats-agent.md)
 - [Tools & Extensibility](./tools/overview.md)
   - [MCP (Model Context Protocol)](./tools/mcp.md)
   - [Browser automation](./tools/browser.md)

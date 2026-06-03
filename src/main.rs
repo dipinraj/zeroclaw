@@ -583,6 +583,22 @@ Examples:
         session_timeout: Option<u64>,
     },
 
+    /// Host ZeroClaw on NATS (Synadia Agent Protocol)
+    #[cfg(feature = "nats-agent")]
+    #[command(long_about = "\
+Serve ZeroClaw as a discoverable NATS microservice (`agents`) using the \
+Synadia Agent Protocol. Callers discover via `$SRV.INFO.agents` and prompt \
+on `agents.prompt.<agent>.<owner>.<name>`.
+
+Requires `[nats_agent]` in config.toml with `enabled = true`.
+
+Examples:
+  zeroclaw nats serve")]
+    Nats {
+        #[command(subcommand)]
+        nats_command: NatsCommands,
+    },
+
     /// Start long-running autonomous runtime (gateway + channels + heartbeat + scheduler)
     // i18n-exempt: clap derive help — framework requires a compile-time literal
     #[command(long_about = "\
@@ -2851,6 +2867,13 @@ enum ModelCommands {
 }
 
 #[derive(Subcommand, Debug)]
+#[cfg(feature = "nats-agent")]
+enum NatsCommands {
+    /// Connect to NATS and serve the Synadia Agent Protocol until interrupted
+    Serve,
+}
+
+#[derive(Subcommand, Debug)]
 enum DoctorCommands {
     /// Probe model catalogs across model_providers and report availability
     Models {
@@ -3554,6 +3577,26 @@ async fn main() -> Result<()> {
             }
         }
 
+        #[cfg(feature = "nats-agent")]
+        Commands::Nats { nats_command } => match nats_command {
+            NatsCommands::Serve => {
+                config.nats_agent.validate(&config)?;
+                if !config.nats_agent.enabled {
+                    anyhow::bail!(
+                        "nats_agent.enabled is false — set enabled = true in [nats_agent] or run `zeroclaw config set nats_agent.enabled true`"
+                    );
+                }
+                let cancel = tokio_util::sync::CancellationToken::new();
+                let cancel_signal = cancel.clone();
+                tokio::spawn(async move {
+                    if tokio::signal::ctrl_c().await.is_ok() {
+                        cancel_signal.cancel();
+                    }
+                });
+                zeroclaw_nats_agent::run(config, cancel).await
+            }
+        },
+
         Commands::Gateway { gateway_command } => {
             match gateway_command {
                 Some(zeroclaw::GatewayCommands::Restart {
@@ -4011,10 +4054,14 @@ async fn main() -> Result<()> {
                     })
                 }));
 
+                #[cfg(feature = "nats-agent")]
+                registry.register_nats_agent(Box::new(|cfg, cancel| {
+                    Box::pin(async move { zeroclaw_nats_agent::run(cfg, cancel).await })
+                }));
+
                 // Pass the shared SOP engine through the registry so
                 // RpcContext (RPC/TUI agent sessions) can share it.
                 registry.set_sop_engine(sop_engine, sop_audit);
-
                 let exit = Box::pin(daemon::run(
                     current_config.clone(),
                     host.clone(),

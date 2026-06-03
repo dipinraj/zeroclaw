@@ -42,6 +42,9 @@ pub type RpcStarter = Box<
 /// Starts the MQTT SOP listener for one configured MQTT channel alias.
 pub type MqttStarter = Box<dyn Fn(MqttConfig) -> StarterFuture + Send + Sync>;
 
+/// Starts the Synadia NATS agent host for one daemon run/reload iteration.
+pub type NatsAgentStarter = Box<dyn Fn(Config, CancellationToken) -> StarterFuture + Send + Sync>;
+
 /// Typed startup registry injected by the binary crate.
 ///
 /// This registry is the source of truth for startup hook values for the current
@@ -54,6 +57,7 @@ pub struct DaemonRegistry {
     socket_start: Option<RpcStarter>,
     wss_start: Option<RpcStarter>,
     mqtt_start: Option<MqttStarter>,
+    nats_agent_start: Option<NatsAgentStarter>,
     /// Shared SOP engine built by the daemon reload loop. Passed through to
     /// RpcContext so RPC/TUI agent sessions share the same engine.
     sop_engine: Option<Arc<std::sync::Mutex<crate::sop::SopEngine>>>,
@@ -110,6 +114,11 @@ impl DaemonRegistry {
         self
     }
 
+    pub fn register_nats_agent(&mut self, starter: NatsAgentStarter) -> &mut Self {
+        self.nats_agent_start = Some(starter);
+        self
+    }
+
     #[cfg(test)]
     fn has_mqtt_start(&self) -> bool {
         self.mqtt_start.is_some()
@@ -133,6 +142,10 @@ impl DaemonRegistry {
 
     pub(crate) fn take_mqtt_start(&mut self) -> Option<MqttStarter> {
         self.mqtt_start.take()
+    }
+
+    pub(crate) fn take_nats_agent_start(&mut self) -> Option<NatsAgentStarter> {
+        self.nats_agent_start.take()
     }
 
     /// Set the shared SOP engine for this daemon iteration.

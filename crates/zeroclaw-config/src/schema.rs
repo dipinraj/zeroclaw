@@ -261,6 +261,11 @@ pub struct Config {
     #[group = "Integrations"]
     pub acp: AcpConfig,
 
+    /// Synadia Agent Protocol for NATS host (`[nats_agent]`).
+    #[serde(default)]
+    #[nested]
+    pub nats_agent: NatsAgentConfig,
+
     /// Channel configurations: Telegram, Discord, Slack, etc. (`[channels]`).
     #[serde(default, alias = "channels_config")]
     #[nested]
@@ -11040,6 +11045,183 @@ impl Default for AcpConfig {
     }
 }
 
+// ── NATS agent (Synadia protocol) ───────────────────────────────
+
+/// Synadia Agent Protocol for NATS host configuration (`[nats_agent]`).
+#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
+#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
+#[prefix = "nats_agent"]
+pub struct NatsAgentConfig {
+    /// When true, `zeroclaw daemon` (or `zeroclaw nats serve`) hosts the agent on NATS.
+    #[serde(default)]
+    pub enabled: bool,
+    /// NATS server URLs (comma-joined at connect time).
+    #[serde(default = "default_nats_agent_servers")]
+    pub servers: Vec<String>,
+    /// `metadata.agent` harness token (default `zeroclaw`).
+    #[serde(default = "default_nats_agent_harness")]
+    pub agent: String,
+    /// `metadata.owner` operator namespace.
+    #[serde(default = "default_nats_agent_owner")]
+    pub owner: String,
+    /// Fifth subject token — instance name (`agents.*.*.<name>`).
+    #[serde(default = "default_nats_agent_instance_name")]
+    pub name: String,
+    /// Service description in `$SRV.INFO`.
+    #[serde(default = "default_nats_agent_description")]
+    pub description: String,
+    /// `[agents.<alias>]` entry to execute for prompts.
+    pub agent_alias: String,
+    /// Heartbeat publish interval in seconds (§8.2).
+    #[serde(default = "default_nats_agent_heartbeat_interval_secs")]
+    pub heartbeat_interval_secs: u64,
+    /// Advertised `max_payload` endpoint metadata (e.g. `8MB`).
+    #[serde(default = "default_nats_agent_max_payload")]
+    pub max_payload: String,
+    /// Endpoint metadata `attachments_ok`.
+    #[serde(default = "default_nats_agent_attachments_ok")]
+    pub attachments_ok: bool,
+    /// Optional fixed `metadata.session` for session-aware harnesses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// NATS username (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// NATS password (optional).
+    #[secret]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema-export", schemars(extend("x-secret" = true)))]
+    pub password: Option<String>,
+    /// NATS auth token (optional).
+    #[secret]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema-export", schemars(extend("x-secret" = true)))]
+    pub token: Option<String>,
+}
+
+fn default_nats_agent_servers() -> Vec<String> {
+    vec!["nats://127.0.0.1:4222".to_string()]
+}
+
+fn default_nats_agent_harness() -> String {
+    "zeroclaw".to_string()
+}
+
+fn default_nats_agent_owner() -> String {
+    "default".to_string()
+}
+
+fn default_nats_agent_instance_name() -> String {
+    "main".to_string()
+}
+
+fn default_nats_agent_description() -> String {
+    "ZeroClaw agent on NATS (Synadia protocol)".to_string()
+}
+
+fn default_nats_agent_heartbeat_interval_secs() -> u64 {
+    30
+}
+
+fn default_nats_agent_max_payload() -> String {
+    "8MB".to_string()
+}
+
+fn default_nats_agent_attachments_ok() -> bool {
+    true
+}
+
+impl Default for NatsAgentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            servers: default_nats_agent_servers(),
+            agent: default_nats_agent_harness(),
+            owner: default_nats_agent_owner(),
+            name: default_nats_agent_instance_name(),
+            description: default_nats_agent_description(),
+            agent_alias: String::new(),
+            heartbeat_interval_secs: default_nats_agent_heartbeat_interval_secs(),
+            max_payload: default_nats_agent_max_payload(),
+            attachments_ok: default_nats_agent_attachments_ok(),
+            session: None,
+            username: None,
+            password: None,
+            token: None,
+        }
+    }
+}
+
+impl NatsAgentConfig {
+    /// Validate NATS agent settings against the full config.
+    pub fn validate(&self, config: &Config) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.agent_alias.trim().is_empty() {
+            anyhow::bail!("nats_agent.agent_alias must be set when nats_agent.enabled = true");
+        }
+        if config.agent(&self.agent_alias).is_none() {
+            anyhow::bail!(
+                "nats_agent.agent_alias '{}' has no [agents.{}] entry",
+                self.agent_alias,
+                self.agent_alias
+            );
+        }
+        if self.agent.is_empty() || self.owner.is_empty() || self.name.is_empty() {
+            anyhow::bail!("nats_agent.agent, owner, and name must be non-empty");
+        }
+        Ok(())
+    }
+
+    /// Byte limit for incoming prompt bodies.
+    pub fn effective_max_payload_bytes(&self, server_max_payload: usize) -> usize {
+        let configured = parse_human_bytes(&self.max_payload).unwrap_or(8 * 1024 * 1024);
+        if server_max_payload > 0 {
+            configured.min(server_max_payload)
+        } else {
+            configured
+        }
+    }
+
+    /// Value advertised on the prompt endpoint metadata.
+    pub fn advertised_max_payload(&self, server_max_payload: usize) -> String {
+        let bytes = self.effective_max_payload_bytes(server_max_payload);
+        format_human_bytes(bytes)
+    }
+}
+
+fn parse_human_bytes(s: &str) -> Option<usize> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let lower = s.to_ascii_lowercase();
+    let (num_part, suffix) = if lower.ends_with("kb") {
+        (&lower[..lower.len() - 2], 1024usize)
+    } else if lower.ends_with("mb") {
+        (&lower[..lower.len() - 2], 1024 * 1024)
+    } else if lower.ends_with("gb") {
+        (&lower[..lower.len() - 2], 1024 * 1024 * 1024)
+    } else if lower.ends_with('b') && !lower.ends_with("kb") && !lower.ends_with("mb") {
+        (&lower[..lower.len() - 1], 1usize)
+    } else {
+        (lower.as_str(), 1usize)
+    };
+    let n: f64 = num_part.trim().parse().ok()?;
+    Some((n * suffix as f64) as usize)
+}
+
+fn format_human_bytes(bytes: usize) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{}MB", bytes / (1024 * 1024))
+    } else if bytes >= 1024 {
+        format!("{}KB", bytes / 1024)
+    } else {
+        format!("{bytes}B")
+    }
+}
+
 // ── Tunnel ──────────────────────────────────────────────────────
 
 /// Tunnel configuration for exposing the gateway publicly (`[tunnel]` section).
@@ -15192,6 +15374,7 @@ impl Default for Config {
             heartbeat: HeartbeatConfig::default(),
             cron: HashMap::new(),
             acp: AcpConfig::default(),
+            nats_agent: NatsAgentConfig::default(),
             channels: ChannelsConfig::default(),
             memory: MemoryConfig::default(),
             storage: StorageConfig::default(),
@@ -20116,6 +20299,7 @@ auto_save = true
             },
             cron: HashMap::new(),
             acp: AcpConfig::default(),
+            nats_agent: NatsAgentConfig::default(),
             channels: ChannelsConfig {
                 cli: true,
                 telegram: HashMap::from([(
@@ -20840,6 +21024,7 @@ default_temperature = 0.7
             heartbeat: HeartbeatConfig::default(),
             cron: HashMap::new(),
             acp: AcpConfig::default(),
+            nats_agent: NatsAgentConfig::default(),
             channels: ChannelsConfig::default(),
             memory: MemoryConfig::default(),
             storage: StorageConfig::default(),

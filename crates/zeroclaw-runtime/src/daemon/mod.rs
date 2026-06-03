@@ -471,6 +471,29 @@ pub async fn run(
         crate::health::mark_component_ok("mqtt");
     }
 
+    if let Some(nats_agent_start) = registry.take_nats_agent_start() {
+        if config.nats_agent.enabled {
+            let nats_cfg = config.clone();
+            let nats_cancel = channels_cancel.clone();
+            let nats_start = std::sync::Arc::new(nats_agent_start);
+            handles.push(spawn_component_supervisor(
+                "nats_agent",
+                initial_backoff,
+                max_backoff,
+                move || {
+                    let cfg = nats_cfg.clone();
+                    let cancel = nats_cancel.clone();
+                    let start = nats_start.clone();
+                    async move { start(cfg, cancel).await }
+                },
+            ));
+        } else {
+            crate::health::mark_component_ok("nats_agent");
+        }
+    } else {
+        crate::health::mark_component_ok("nats_agent");
+    }
+
     if config.heartbeat.enabled {
         let heartbeat_cfg = config.clone();
         handles.push(spawn_component_supervisor(
